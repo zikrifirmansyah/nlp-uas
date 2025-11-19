@@ -20,7 +20,7 @@ Run:
 
 ```bash
 python main.py
-# then open http://127.0.0.1:5000 in your browser
+# then open http://127.0.0.1:5500 in your browser
 ```
 
 Notes:
