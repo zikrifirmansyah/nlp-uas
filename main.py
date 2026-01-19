@@ -1,4 +1,5 @@
 from flask import Flask, render_template_string, request, redirect, url_for
+import matplotlib.text as mpl_text
 import pandas as pd
 import numpy as np
 import re
@@ -9,6 +10,11 @@ from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+from collections import Counter
 import pickle
 
 # Ensure necessary NLTK data is available
@@ -257,6 +263,73 @@ def classify_spam(text: str) -> tuple:
 
 # ===================== END CLASSIFIERS =====================
 
+# ===================== SVM CLASSIFIERS =====================
+def train_svm_classifiers():
+    sentiment_texts, sentiment_labels, spam_texts, spam_labels = create_training_data()
+    
+    # ---------- SENTIMENT ----------
+    sentiment_pipeline = Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=5000)),
+        ('svm', LinearSVC())
+    ])
+
+    sentiment_pipeline.fit(sentiment_texts, sentiment_labels)
+
+    sentiment_svm = CalibratedClassifierCV(
+        estimator=sentiment_pipeline,
+        cv='prefit'
+    )
+    sentiment_svm.fit(sentiment_texts, sentiment_labels)
+
+    # ---------- SPAM ----------
+    spam_pipeline = Pipeline([
+        ('tfidf', TfidfVectorizer(max_features=5000)),
+        ('svm', LinearSVC())
+    ])
+
+    spam_pipeline.fit(spam_texts, spam_labels)
+
+    spam_svm = CalibratedClassifierCV(
+        estimator=spam_pipeline,
+        cv='prefit'
+    )
+    spam_svm.fit(spam_texts, spam_labels)
+
+    return sentiment_svm, spam_svm
+
+
+print("Training SVM classifiers...")
+SENTIMENT_SVM, SPAM_SVM = train_svm_classifiers()
+print("SVM ready!")
+
+def classify_sentiment_svm(text: str):
+    if not text or not text.strip():
+        return ('neutral', 0.0)
+
+    text_clean = clean_text(text)
+    if not text_clean:
+        return ('neutral', 0.0)
+
+    label = SENTIMENT_SVM.predict([text_clean])[0]
+    proba = SENTIMENT_SVM.predict_proba([text_clean])[0]
+
+    return (label, round(float(max(proba)), 2))
+
+
+def classify_spam_svm(text: str):
+    if not text or not text.strip():
+        return ('not_spam', 0.0)
+
+    text_clean = clean_text(text)
+    if not text_clean:
+        return ('not_spam', 0.0)
+
+    label = SPAM_SVM.predict([text_clean])[0]
+    proba = SPAM_SVM.predict_proba([text_clean])[0]
+
+    return (label, round(float(max(proba)), 2))
+# ===================== END SVM CLASSIFIERS =====================
+
 EMOJI_PATTERN = re.compile("["
 													 "\U0001F600-\U0001F64F"  # emoticons
 													 "\U0001F300-\U0001F5FF"  # symbols & pictographs
@@ -390,6 +463,18 @@ RESULT_HTML = '''
 			<h1 class="mb-3">Preprocessing & Classification Result</h1>
 			<a href="/" class="btn btn-secondary mb-3">&larr; Back</a>
 
+			<a href="/comments?csv_path={{ csv_path }}&text_col={{ text_col }}"
+				class="btn btn-outline-primary mb-3 ms-2">
+				View Per-Comment Analysis
+			</a>
+   
+			<a href="/svm?csv_path={{ csv_path }}&text_col={{ text_col }}"
+				class="btn btn-outline-success mb-3 ms-2">
+				SVM Classification
+			</a>
+
+
+
 			{% if stats %}
 			<div class="row mb-4">
 				<div class="col-md-6">
@@ -432,6 +517,30 @@ RESULT_HTML = '''
 				</div>
 			</div>
 			{% endif %}
+   
+			{% if svm_stats %}
+			<hr>
+
+			<h3>Support Vector Machine (SVM) Result</h3>
+
+			<table border="1" cellpadding="8">
+				<tr>
+					<th>Task</th>
+					<th>Prediction</th>
+					<th>Confidence</th>
+				</tr>
+				<tr>
+					<td>Sentiment</td>
+					<td>{{ svm_stats.sentiment }}</td>
+					<td>{{ svm_stats.sentiment_conf }}%</td>
+				</tr>
+				<tr>
+					<td>Spam</td>
+					<td>{{ svm_stats.spam }}</td>
+					<td>{{ svm_stats.spam_conf }}%</td>
+				</tr>
+			</table>
+			{% endif %}
 
 			<h5>Processed (first {{ n_rows }} rows)</h5>
 			<div class="d-flex justify-content-between align-items-center mb-2">
@@ -468,6 +577,111 @@ RESULT_HTML = '''
 </html>
 '''
 
+COMMENT_HTML = '''
+<!doctype html>
+<html>
+<head>
+  <title>Per Comment Classification</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .badge-positive { background:#198754 }
+    .badge-negative { background:#dc3545 }
+    .badge-neutral { background:#6c757d }
+    .badge-spam { background:#fd7e14 }
+    .badge-not_spam { background:#20c997 }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4">
+
+<h2>Naive Bayes Per Comment Classification</h2>
+
+<a href="/" class="btn btn-secondary mb-3">&larr; Back</a>
+
+<a href="/svm?csv_path={{ csv_path }}&text_col={{ text_col }}"
+   class="btn btn-outline-primary mb-3 ms-2">
+   SVM View
+</a>
+
+<div class="d-flex justify-content-between mb-2">
+  <div>Page {{ page }} / {{ total_pages }}</div>
+  <div>
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/comments?csv_path={{ csv_path }}&text_col={{ text_col }}&page=1&page_size={{ page_size }}">First</a>
+
+    {% if page > 1 %}
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/comments?csv_path={{ csv_path }}&text_col={{ text_col }}&page={{ page-1 }}&page_size={{ page_size }}">Prev</a>
+    {% endif %}
+
+    {% if page < total_pages %}
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/comments?csv_path={{ csv_path }}&text_col={{ text_col }}&page={{ page+1 }}&page_size={{ page_size }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="table-responsive">
+  {{ table_html | safe }}
+</div>
+
+</div>
+</body>
+</html>
+'''
+
+SVM_HTML = '''
+<!doctype html>
+<html>
+<head>
+  <title>SVM Comment Classification</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .badge-positive { background:#198754 }
+    .badge-negative { background:#dc3545 }
+    .badge-neutral { background:#6c757d }
+    .badge-spam { background:#fd7e14 }
+    .badge-not_spam { background:#20c997 }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4">
+
+<h2>SVM Per-Comment Classification</h2>
+
+<a href="/" class="btn btn-secondary mb-3">&larr; Back</a>
+
+<a href="/comments?csv_path={{ csv_path }}&text_col={{ text_col }}"
+   class="btn btn-outline-primary mb-3 ms-2">
+   Naive Bayes View
+</a>
+
+<div class="d-flex justify-content-between mb-2">
+  <div>Page {{ page }} / {{ total_pages }}</div>
+  <div>
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/svm?csv_path={{ csv_path }}&text_col={{ text_col }}&page=1&page_size={{ page_size }}">First</a>
+
+    {% if page > 1 %}
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/svm?csv_path={{ csv_path }}&text_col={{ text_col }}&page={{ page-1 }}&page_size={{ page_size }}">Prev</a>
+    {% endif %}
+
+    {% if page < total_pages %}
+    <a class="btn btn-sm btn-outline-secondary"
+       href="/svm?csv_path={{ csv_path }}&text_col={{ text_col }}&page={{ page+1 }}&page_size={{ page_size }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="table-responsive">
+  {{ table_html | safe }}
+</div>
+
+</div>
+</body>
+</html>
+'''
 
 
 @app.route('/', methods=['GET'])
@@ -504,6 +718,16 @@ def show_all():
 		return render_template_string(INDEX_HTML, table_html=None, error=f"Error reading CSV: {e}")
 
 
+def classify_text_svm(text):
+    text = str(text)
+
+    sent = SENTIMENT_SVM.predict([text])[0]
+    sent_conf = SENTIMENT_SVM.predict_proba([text]).max()
+
+    spam = SPAM_SVM.predict([text])[0]
+    spam_conf = SPAM_SVM.predict_proba([text]).max()
+
+    return (sent, sent_conf, spam, spam_conf)
 
 @app.route('/preprocess', methods=['GET', 'POST'])
 def preprocess():
@@ -592,6 +816,22 @@ def preprocess():
 		'not_spam': int((spam_labels == 'not_spam').sum())
 	}
 
+	# SVM classification
+	svm_results = texts.map(classify_text_svm)
+
+	svm_sentiment = svm_results.map(lambda x: x[0])
+	svm_sentiment_conf = svm_results.map(lambda x: x[1])
+	svm_spam = svm_results.map(lambda x: x[2])
+	svm_spam_conf = svm_results.map(lambda x: x[3])
+
+ 
+	svm_stats = {
+            "sentiment": svm_sentiment,
+            "sentiment_conf": round(svm_sentiment_conf * 100, 2),
+            "spam": svm_spam,
+            "spam_conf": round(svm_spam_conf * 100, 2),
+    }
+ 
 	total = int(result_df.shape[0])
 	total_pages = max(1, (total + page_size - 1) // page_size)
 	if page < 1:
@@ -632,7 +872,170 @@ def preprocess():
 		csv_path=csv_path,
 		text_col=text_col,
 		page_size=page_size,
-		stats=stats)
+		stats=stats,
+		svm_stats=svm_stats
+  	)
+ 
+#  -------------------- PER COMMENT VIEW =====================
+def explode_comments(df: pd.DataFrame, text_col: str):
+    """
+    Turns:
+      post_row -> "comment1 | comment2 | comment3"
+    Into:
+      multiple rows, one per comment
+    """
+    rows = []
+
+    for idx, row in df.iterrows():
+        raw_text = str(row.get(text_col, ""))
+        segments = [s.strip() for s in raw_text.split('|') if s.strip()]
+
+        for c in segments:
+            rows.append({
+                "post_index": idx,
+                "comment": c
+            })
+
+    return pd.DataFrame(rows)
+
+@app.route('/comments', methods=['GET'])
+def comments_view():
+    csv_path = request.args.get('csv_path', 'dataNew.csv')
+    text_col = request.args.get('text_col', 'comments')
+
+    try:
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 25))
+    except Exception:
+        page, page_size = 1, 25
+
+    if not os.path.exists(csv_path):
+        return "CSV not found", 404
+
+    df = pd.read_csv(csv_path)
+
+    if text_col not in df.columns:
+        return f"Column {text_col} not found", 400
+
+    # 🔥 explode comments
+    exploded = explode_comments(df, text_col)
+
+    if exploded.empty:
+        return "No comments found", 200
+
+    # Clean + classify PER COMMENT
+    exploded['cleaned'] = exploded['comment'].apply(clean_text)
+
+    exploded[['sentiment', 'sentiment_conf']] = exploded['cleaned'].apply(
+        lambda x: pd.Series(classify_sentiment(x))
+    )
+
+    exploded[['spam', 'spam_conf']] = exploded['cleaned'].apply(
+        lambda x: pd.Series(classify_spam(x))
+    )
+
+    # Pagination
+    total = len(exploded)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    view_df = exploded.iloc[start:end].copy()
+
+    # Badges
+    def sentiment_badge(row):
+        return f'<span class="badge badge-{row.sentiment}">{row.sentiment}</span> ({row.sentiment_conf:.0%})'
+
+    def spam_badge(row):
+        return f'<span class="badge badge-{row.spam}">{row.spam.replace("_"," ")}</span> ({row.spam_conf:.0%})'
+
+    view_df['sentiment'] = view_df.apply(sentiment_badge, axis=1)
+    view_df['spam'] = view_df.apply(spam_badge, axis=1)
+
+    view_df = view_df[['post_index', 'comment', 'sentiment', 'spam']]
+
+    table_html = view_df.to_html(
+        classes="table table-sm table-striped",
+        index=False,
+        escape=False
+    )
+
+    return render_template_string(COMMENT_HTML,
+        table_html=table_html,
+        page=page,
+        total_pages=total_pages,
+        csv_path=csv_path,
+        text_col=text_col,
+        page_size=page_size
+    )
+
+@app.route('/svm', methods=['GET'])
+def svm_view():
+    csv_path = request.args.get('csv_path', 'dataNew.csv')
+    text_col = request.args.get('text_col', 'comments')
+
+    try:
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('page_size', 25))
+    except Exception:
+        page, page_size = 1, 25
+
+    if not os.path.exists(csv_path):
+        return "CSV not found", 404
+
+    df = pd.read_csv(csv_path)
+
+    if text_col not in df.columns:
+        return "Column not found", 400
+
+    exploded = explode_comments(df, text_col)
+
+    exploded['cleaned'] = exploded['comment'].apply(clean_text)
+
+    exploded[['sentiment', 'sentiment_conf']] = exploded['cleaned'].apply(
+        lambda x: pd.Series(classify_sentiment_svm(x))
+    )
+
+    exploded[['spam', 'spam_conf']] = exploded['cleaned'].apply(
+        lambda x: pd.Series(classify_spam_svm(x))
+    )
+
+    total = len(exploded)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    view_df = exploded.iloc[start:end].copy()
+
+    def sentiment_badge(row):
+        return f'<span class="badge badge-{row.sentiment}">{row.sentiment}</span> ({row.sentiment_conf:.0%})'
+
+    def spam_badge(row):
+        return f'<span class="badge badge-{row.spam}">{row.spam.replace("_"," ")}</span> ({row.spam_conf:.0%})'
+
+    view_df['sentiment'] = view_df.apply(sentiment_badge, axis=1)
+    view_df['spam'] = view_df.apply(spam_badge, axis=1)
+
+    view_df = view_df[['post_index', 'comment', 'sentiment', 'spam']]
+
+    table_html = view_df.to_html(
+        classes='table table-sm table-striped',
+        index=False,
+        escape=False
+    )
+
+    return render_template_string(SVM_HTML,
+        table_html=table_html,
+        page=page,
+        total_pages=total_pages,
+        csv_path=csv_path,
+        text_col=text_col,
+        page_size=page_size
+    )
 
 
 if __name__ == '__main__':
