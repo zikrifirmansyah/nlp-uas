@@ -86,7 +86,7 @@ NEGATIVE_WORDS = {
     'kasar', 'toxic', 'racun', 'merusak', 'hancur', 'rusak', 'parah', 'payah'
 }
 
-# Spam indicators (common spam patterns in Indonesian social media)
+# Spam indicators (common spam patterns in Indonesian social media)``
 SPAM_INDICATORS = {
     'klik', 'click', 'link', 'bio', 'promo', 'diskon', 'discount', 'gratis',
     'free', 'hadiah', 'prize', 'menang', 'winner', 'claim', 'klaim', 'daftar',
@@ -658,6 +658,90 @@ def get_model_comparison():
         })
     return comparison
 
+def get_best_models():
+    """Get the best model for each task based on F1-score."""
+    best_sentiment = None
+    best_spam = None
+    best_sentiment_score = -1
+    best_spam_score = -1
+    
+    for key, info in ALL_MODELS.items():
+        if info['task'] == 'sentiment' and info['f1_score'] > best_sentiment_score:
+            best_sentiment_score = info['f1_score']
+            best_sentiment = {
+                'key': key,
+                'algorithm': info['algorithm'],
+                'feature_extraction': info['feature_extraction'],
+                'model': info['model'],
+                'accuracy': info['accuracy'],
+                'precision': info['precision'],
+                'recall': info['recall'],
+                'f1_score': info['f1_score']
+            }
+        elif info['task'] == 'spam' and info['f1_score'] > best_spam_score:
+            best_spam_score = info['f1_score']
+            best_spam = {
+                'key': key,
+                'algorithm': info['algorithm'],
+                'feature_extraction': info['feature_extraction'],
+                'model': info['model'],
+                'accuracy': info['accuracy'],
+                'precision': info['precision'],
+                'recall': info['recall'],
+                'f1_score': info['f1_score']
+            }
+    
+    return best_sentiment, best_spam
+
+# Get best models globally
+BEST_SENTIMENT_MODEL, BEST_SPAM_MODEL = get_best_models()
+print(f"Best Sentiment Model: {BEST_SENTIMENT_MODEL['algorithm']} + {BEST_SENTIMENT_MODEL['feature_extraction']} (F1: {BEST_SENTIMENT_MODEL['f1_score']}%)")
+print(f"Best Spam Model: {BEST_SPAM_MODEL['algorithm']} + {BEST_SPAM_MODEL['feature_extraction']} (F1: {BEST_SPAM_MODEL['f1_score']}%)")
+
+def predict_with_best_model(text: str):
+    """
+    Predict sentiment and spam using the best models.
+    Returns dict with predictions and confidence.
+    """
+    if not text or not text.strip():
+        return {
+            'sentiment': {'label': 'neutral', 'confidence': 0.0},
+            'spam': {'label': 'not_spam', 'confidence': 0.0},
+            'cleaned_text': ''
+        }
+    
+    text_clean = clean_text(text)
+    if not text_clean:
+        return {
+            'sentiment': {'label': 'neutral', 'confidence': 0.0},
+            'spam': {'label': 'not_spam', 'confidence': 0.0},
+            'cleaned_text': ''
+        }
+    
+    # Sentiment prediction
+    sent_model = BEST_SENTIMENT_MODEL['model']
+    sent_label = sent_model.predict([text_clean])[0]
+    if hasattr(sent_model, 'predict_proba'):
+        sent_proba = sent_model.predict_proba([text_clean])[0]
+        sent_conf = float(max(sent_proba))
+    else:
+        sent_conf = 1.0
+    
+    # Spam prediction
+    spam_model = BEST_SPAM_MODEL['model']
+    spam_label = spam_model.predict([text_clean])[0]
+    if hasattr(spam_model, 'predict_proba'):
+        spam_proba = spam_model.predict_proba([text_clean])[0]
+        spam_conf = float(max(spam_proba))
+    else:
+        spam_conf = 1.0
+    
+    return {
+        'sentiment': {'label': sent_label, 'confidence': round(sent_conf, 4)},
+        'spam': {'label': spam_label, 'confidence': round(spam_conf, 4)},
+        'cleaned_text': text_clean
+    }
+
 # ===================== END ALL MODELS =====================
 
 EMOJI_PATTERN = re.compile("["
@@ -761,6 +845,7 @@ INDEX_HTML = '''
 				<a href="/features" class="btn btn-outline-info ms-2">Feature Extraction (BoW/TF-IDF)</a>
 				<a href="/models" class="btn btn-outline-success ms-2">Model Comparison (All 12 Models)</a>
 				<a href="/models/evaluation" class="btn btn-outline-warning ms-2">Model Evaluation & Metrics</a>
+				<a href="/predict" class="btn btn-primary ms-2">🔮 Predict (Best Model)</a>
 			</div>
 
 			{% if table_html %}
@@ -1658,6 +1743,205 @@ EVALUATION_HTML = '''
 </html>
 '''
 
+PREDICT_HTML = '''
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Predict - Select Model</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .prediction-card { transition: transform 0.2s; }
+    .prediction-card:hover { transform: scale(1.02); }
+    .badge-positive { background:#198754; font-size: 1.2rem; }
+    .badge-negative { background:#dc3545; font-size: 1.2rem; }
+    .badge-neutral { background:#6c757d; font-size: 1.2rem; }
+    .badge-spam { background:#fd7e14; font-size: 1.2rem; }
+    .badge-not_spam { background:#20c997; font-size: 1.2rem; }
+    .confidence-bar { height: 25px; border-radius: 5px; }
+    .model-info { background: #f8f9fa; border-radius: 8px; padding: 15px; }
+    .result-section { animation: fadeIn 0.5s ease-in; }
+    .best-option { font-weight: bold; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4">
+
+<h2>🔮 Predict with Selected Model</h2>
+<p class="text-muted">Choose your preferred model or use the best performing model (pre-selected)</p>
+
+<a href="/" class="btn btn-secondary mb-3">&larr; Back</a>
+<a href="/models/evaluation" class="btn btn-outline-info mb-3 ms-2">View All Model Metrics</a>
+
+<!-- Input Form -->
+<div class="card mb-4">
+  <div class="card-header bg-primary text-white"><strong>Enter Text & Select Models</strong></div>
+  <div class="card-body">
+    <form method="post" action="/predict">
+      <div class="mb-3">
+        <label class="form-label"><strong>Text to Classify</strong></label>
+        <textarea name="text" class="form-control" rows="4" placeholder="Masukkan teks dalam Bahasa Indonesia untuk dianalisis...&#10;&#10;Contoh: Videonya bagus banget, sangat menginspirasi!">{{ input_text or '' }}</textarea>
+      </div>
+      
+      <div class="row mb-3">
+        <div class="col-md-6">
+          <label class="form-label"><strong>😊 Sentiment Model</strong></label>
+          <select name="sentiment_model" class="form-select">
+            {% for model in sentiment_models %}
+            <option value="{{ model.key }}" {% if model.key == selected_sentiment_model %}selected{% endif %}>
+              {{ model.algorithm }} + {{ model.feature_extraction }} (F1: {{ model.f1_score }}%){% if model.is_best %} ⭐ BEST{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">⭐ indicates best performing model</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label"><strong>📧 Spam Model</strong></label>
+          <select name="spam_model" class="form-select">
+            {% for model in spam_models %}
+            <option value="{{ model.key }}" {% if model.key == selected_spam_model %}selected{% endif %}>
+              {{ model.algorithm }} + {{ model.feature_extraction }} (F1: {{ model.f1_score }}%){% if model.is_best %} ⭐ BEST{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">⭐ indicates best performing model</div>
+        </div>
+      </div>
+      
+      <button class="btn btn-primary btn-lg">🔍 Predict</button>
+      <button type="button" class="btn btn-outline-secondary ms-2" onclick="document.querySelector('textarea').value = ''">Clear Text</button>
+    </form>
+  </div>
+</div>
+
+{% if result %}
+<!-- Prediction Results -->
+<div class="result-section">
+  <h4 class="mb-3">Prediction Results</h4>
+  
+  <div class="row">
+    <!-- Sentiment Result -->
+    <div class="col-md-6 mb-3">
+      <div class="card prediction-card h-100 {% if result.sentiment.label == 'positive' %}border-success{% elif result.sentiment.label == 'negative' %}border-danger{% else %}border-secondary{% endif %}">
+        <div class="card-header">
+          <strong>😊 Sentiment Analysis</strong>
+          <span class="badge bg-secondary float-end">{{ result.sentiment.model_name }}</span>
+        </div>
+        <div class="card-body text-center">
+          <div class="mb-3">
+            <span class="badge badge-{{ result.sentiment.label }} p-3">
+              {% if result.sentiment.label == 'positive' %}👍 POSITIVE
+              {% elif result.sentiment.label == 'negative' %}👎 NEGATIVE
+              {% else %}😐 NEUTRAL{% endif %}
+            </span>
+          </div>
+          <div class="mb-2">
+            <strong>Confidence: {{ (result.sentiment.confidence * 100)|round(1) }}%</strong>
+          </div>
+          <div class="progress confidence-bar">
+            <div class="progress-bar {% if result.sentiment.label == 'positive' %}bg-success{% elif result.sentiment.label == 'negative' %}bg-danger{% else %}bg-secondary{% endif %}" 
+                 role="progressbar" 
+                 style="width: {{ (result.sentiment.confidence * 100)|round(1) }}%">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Spam Result -->
+    <div class="col-md-6 mb-3">
+      <div class="card prediction-card h-100 {% if result.spam.label == 'spam' %}border-warning{% else %}border-info{% endif %}">
+        <div class="card-header">
+          <strong>📧 Spam Detection</strong>
+          <span class="badge bg-secondary float-end">{{ result.spam.model_name }}</span>
+        </div>
+        <div class="card-body text-center">
+          <div class="mb-3">
+            <span class="badge badge-{{ result.spam.label }} p-3">
+              {% if result.spam.label == 'spam' %}🚫 SPAM
+              {% else %}✅ NOT SPAM{% endif %}
+            </span>
+          </div>
+          <div class="mb-2">
+            <strong>Confidence: {{ (result.spam.confidence * 100)|round(1) }}%</strong>
+          </div>
+          <div class="progress confidence-bar">
+            <div class="progress-bar {% if result.spam.label == 'spam' %}bg-warning{% else %}bg-info{% endif %}" 
+                 role="progressbar" 
+                 style="width: {{ (result.spam.confidence * 100)|round(1) }}%">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Text Analysis -->
+  <div class="card mt-3">
+    <div class="card-header"><strong>Text Analysis</strong></div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <h6>Original Text:</h6>
+          <div class="p-2 bg-light rounded" style="word-wrap: break-word;">{{ input_text }}</div>
+        </div>
+        <div class="col-md-6">
+          <h6>Cleaned Text (Preprocessed):</h6>
+          <div class="p-2 bg-light rounded" style="word-wrap: break-word;"><code>{{ result.cleaned_text }}</code></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Example Texts -->
+<div class="card mt-4">
+  <div class="card-header"><strong>Try These Examples</strong></div>
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-4">
+        <h6 class="text-success">Positive Examples:</h6>
+        <ul class="small">
+          <li><a href="#" onclick="setExample('Videonya bagus banget, sangat menginspirasi!')">Videonya bagus banget, sangat menginspirasi!</a></li>
+          <li><a href="#" onclick="setExample('Keren abis kontennya, terus berkarya ya!')">Keren abis kontennya, terus berkarya ya!</a></li>
+          <li><a href="#" onclick="setExample('Mantap sekali, recommended banget!')">Mantap sekali, recommended banget!</a></li>
+        </ul>
+      </div>
+      <div class="col-md-4">
+        <h6 class="text-danger">Negative Examples:</h6>
+        <ul class="small">
+          <li><a href="#" onclick="setExample('Jelek banget videonya, buang waktu')">Jelek banget videonya, buang waktu</a></li>
+          <li><a href="#" onclick="setExample('Kecewa berat sama hasilnya, mengecewakan')">Kecewa berat sama hasilnya, mengecewakan</a></li>
+          <li><a href="#" onclick="setExample('Tidak recommended, buruk sekali')">Tidak recommended, buruk sekali</a></li>
+        </ul>
+      </div>
+      <div class="col-md-4">
+        <h6 class="text-warning">Spam Examples:</h6>
+        <ul class="small">
+          <li><a href="#" onclick="setExample('Klik link di bio untuk dapat hadiah gratis!')">Klik link di bio untuk dapat hadiah gratis!</a></li>
+          <li><a href="#" onclick="setExample('Slot gacor hari ini, maxwin jackpot!')">Slot gacor hari ini, maxwin jackpot!</a></li>
+          <li><a href="#" onclick="setExample('DM untuk order, promo diskon 50%!')">DM untuk order, promo diskon 50%!</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function setExample(text) {
+  document.querySelector('textarea[name="text"]').value = text;
+  event.preventDefault();
+}
+</script>
+
+</div>
+</body>
+</html>
+'''
+
 
 @app.route('/', methods=['GET'])
 def index():
@@ -1985,6 +2269,97 @@ def models_evaluation():
         bow_stats=bow_stats,
         tfidf_stats=tfidf_stats,
         winner=winner
+    )
+
+
+@app.route('/predict', methods=['GET', 'POST'])
+def predict():
+    """Predict using the best models."""
+    input_text = ''
+    result = None
+    
+    # Build model lists for dropdowns
+    sentiment_models = []
+    spam_models = []
+    
+    if ALL_MODELS:
+        for key, model_info in ALL_MODELS.items():
+            parts = key.split('_')
+            task = parts[0]
+            algorithm = parts[1]
+            feature_extraction = parts[2]
+            
+            model_entry = {
+                'key': key,
+                'algorithm': algorithm,
+                'feature_extraction': feature_extraction,
+                'f1_score': round(model_info['f1_score'], 2),
+                'is_best': False
+            }
+            
+            if task == 'sentiment':
+                if BEST_SENTIMENT_MODEL and key == f"sentiment_{BEST_SENTIMENT_MODEL['algorithm']}_{BEST_SENTIMENT_MODEL['feature_extraction']}":
+                    model_entry['is_best'] = True
+                sentiment_models.append(model_entry)
+            else:
+                if BEST_SPAM_MODEL and key == f"spam_{BEST_SPAM_MODEL['algorithm']}_{BEST_SPAM_MODEL['feature_extraction']}":
+                    model_entry['is_best'] = True
+                spam_models.append(model_entry)
+        
+        # Sort by F1 score descending
+        sentiment_models.sort(key=lambda x: x['f1_score'], reverse=True)
+        spam_models.sort(key=lambda x: x['f1_score'], reverse=True)
+    
+    # Get default selected models (best ones)
+    selected_sentiment_model = ''
+    selected_spam_model = ''
+    
+    if BEST_SENTIMENT_MODEL:
+        selected_sentiment_model = f"sentiment_{BEST_SENTIMENT_MODEL['algorithm']}_{BEST_SENTIMENT_MODEL['feature_extraction']}"
+    if BEST_SPAM_MODEL:
+        selected_spam_model = f"spam_{BEST_SPAM_MODEL['algorithm']}_{BEST_SPAM_MODEL['feature_extraction']}"
+    
+    if request.method == 'POST':
+        input_text = request.form.get('text', '')
+        selected_sentiment_model = request.form.get('sentiment_model', selected_sentiment_model)
+        selected_spam_model = request.form.get('spam_model', selected_spam_model)
+        
+        if input_text.strip() and ALL_MODELS:
+            # Parse selected models
+            sent_parts = selected_sentiment_model.split('_')
+            spam_parts = selected_spam_model.split('_')
+            
+            sent_algorithm = sent_parts[1]
+            sent_feature = sent_parts[2]
+            spam_algorithm = spam_parts[1]
+            spam_feature = spam_parts[2]
+            
+            # Classify with selected models (returns tuple: label, confidence)
+            sent_label, sent_conf = classify_with_model(input_text, 'sentiment', sent_algorithm, sent_feature)
+            spam_label, spam_conf = classify_with_model(input_text, 'spam', spam_algorithm, spam_feature)
+            
+            result = {
+                'text': input_text,
+                'cleaned_text': clean_text(input_text),
+                'sentiment': {
+                    'label': sent_label,
+                    'confidence': sent_conf,
+                    'model_name': f"{sent_algorithm} + {sent_feature}"
+                },
+                'spam': {
+                    'label': spam_label,
+                    'confidence': spam_conf,
+                    'model_name': f"{spam_algorithm} + {spam_feature}"
+                }
+            }
+    
+    return render_template_string(PREDICT_HTML,
+        input_text=input_text,
+        result=result,
+        sentiment_models=sentiment_models,
+        spam_models=spam_models,
+        selected_sentiment_model=selected_sentiment_model,
+        selected_spam_model=selected_spam_model
     )
 
 
