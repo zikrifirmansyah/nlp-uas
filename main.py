@@ -282,11 +282,9 @@ def train_svm_classifiers():
         ('svm', LinearSVC())
     ])
 
-    sentiment_pipeline.fit(sentiment_texts, sentiment_labels)
-
     sentiment_svm = CalibratedClassifierCV(
         estimator=sentiment_pipeline,
-        cv='prefit'
+        cv=5
     )
     sentiment_svm.fit(sentiment_texts, sentiment_labels)
 
@@ -296,11 +294,9 @@ def train_svm_classifiers():
         ('svm', LinearSVC())
     ])
 
-    spam_pipeline.fit(spam_texts, spam_labels)
-
     spam_svm = CalibratedClassifierCV(
         estimator=spam_pipeline,
-        cv='prefit'
+        cv=5
     )
     spam_svm.fit(spam_texts, spam_labels)
 
@@ -410,9 +406,8 @@ def train_all_models():
                     vec2 = CountVectorizer(ngram_range=(1, 2), max_features=5000) if vec_name == 'BoW' else TfidfVectorizer(ngram_range=(1, 2), max_features=5000)
                     clf2 = LinearSVC(random_state=42, max_iter=2000)
                     pipeline2 = Pipeline([('vectorizer', vec2), ('classifier', clf2)])
-                    pipeline2.fit(texts, labels)
                     
-                    calibrated = CalibratedClassifierCV(estimator=pipeline2, cv='prefit')
+                    calibrated = CalibratedClassifierCV(estimator=pipeline2, cv=5)
                     calibrated.fit(texts, labels)
                     final_model = calibrated
                 else:
